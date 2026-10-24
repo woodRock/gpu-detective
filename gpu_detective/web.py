@@ -33,7 +33,8 @@ def api_now(q: dict) -> dict:
     now = time.time()
     snaps = store.load(store.connect(), now - NOW_LOOKBACK)
     current = [s for s in an.latest(snaps) if s.ts >= now - STALE]
-    idle_for = {(i.host, i.gpu.index): i.idle_seconds for i in an.idle_gpus(snaps, 0)}
+    idle_for = {(i.host, i.gpu.index): i.idle_seconds
+                for i in an.idle_gpus(snaps, an.IDLE_MIN_SECONDS)}
     hosts = []
     for s in current:
         gpus = []
@@ -48,7 +49,7 @@ def api_now(q: dict) -> dict:
                           for p in procs]})
         hosts.append({"host": s.host, "reachable": s.reachable, "error": s.error, "gpus": gpus})
     return {"ts": max((s.ts for s in current), default=None), "hosts": hosts,
-            "lookback": NOW_LOOKBACK, "idle_util": an.IDLE_UTIL_PCT,
+            "lookback": NOW_LOOKBACK, "idle_util": an.IDLE_UTIL_PCT, "idle_min": an.IDLE_MIN_SECONDS,
             "coverage": an.coverage(current).line()}
 
 
@@ -74,6 +75,7 @@ def api_lanes(q: dict) -> dict:
     usage = an.user_usage(snaps)
     return {
         "times": times, "max_gap": an.MAX_GAP, "idle_util": an.IDLE_UTIL_PCT,
+        "idle_min": an.IDLE_MIN_SECONDS,
         "sweeps": len({s.ts for s in snaps}),
         "users": [{"user": u.user, "gpu_hours": round(u.gpu_hours, 2),
                    "idle_hours": round(u.idle_gpu_hours, 2), "peak_gpus": u.peak_gpus,

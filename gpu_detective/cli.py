@@ -27,6 +27,7 @@ from gpu_detective import store
 from gpu_detective.collect import HostSnapshot, sweep
 
 STALE = 600     # `now` ignores snapshots older than this
+NOW_LOOKBACK = 6 * 3600     # ...and looks this far back to time idle stretches
 PRUNE_EVERY = 3600
 KEEP = 30 * 86400.0
 
@@ -104,8 +105,10 @@ def cmd_watch(args) -> int:
 
 
 def cmd_now(args) -> int:
-    db = store.connect()
-    snaps = an.latest(store.load(db, time.time() - STALE))
+    since = time.time() - NOW_LOOKBACK
+    history = store.load(store.connect(), since)
+    snaps = [s for s in an.latest(history) if s.ts >= time.time() - STALE]
+    idle = {(i.host, i.gpu.index): i for i in an.idle_gpus(history, an.IDLE_MIN_SECONDS)}
     if not snaps:
         print(f"No sweeps in the last {an.fmt_duration(STALE)}: run `detective collect`.")
         return 1
@@ -125,7 +128,10 @@ def cmd_now(args) -> int:
             for i, p in enumerate(procs):
                 age = s.ts - p.started if p.started is not None else None
                 lead = base if i == 0 else ["", "", "", "", ""]
-                flag = "  idle" if an.is_idle(g) else ""
+                i_g = idle.get((s.host, g.index))
+                # an idle stretch that reaches back to the start of the history read: at least that long
+                flag = (f"  idle {an.fmt_duration(i_g.idle_seconds)}"
+                        f"{'+' if i_g.idle_since - history[0].ts < an.MAX_GAP else ''}") if i_g else ""
                 rows.append(lead + [p.user, an.fmt_duration(age) + flag,
                                     clip(p.command, args.width)])
     table(rows, ["HOST", "GPU", "MODEL", "UTIL", "MEM", "USER", "RUNTIME", "COMMAND"])
@@ -150,7 +156,8 @@ def cmd_users(args) -> int:
             for u in usage[:args.top]]
     table(rows, ["USER", "GPU-H", "SHARE", "IDLE-H", "PEAK GPUS", "PEAK HOSTS", "HOSTS"])
     print(f"\nWindow: {clock(snaps[0].ts)} → {clock(snaps[-1].ts)}, "
-          f"{len({s.ts for s in snaps})} sweeps. IDLE-H = held below {an.IDLE_UTIL_PCT}% util.")
+          f"{len({s.ts for s in snaps})} sweeps. IDLE-H = held below {an.IDLE_UTIL_PCT}% util "
+          f"in every sweep for {an.fmt_duration(an.IDLE_MIN_SECONDS)}+.")
     print(an.coverage(snaps).line())
     return 0
 

@@ -153,7 +153,7 @@ footer { margin-top: 24px; color: var(--muted); font-size: 12.5px; }
     <div class="panel">
       <div class="legend">
         <span><i style="background:var(--busy)"></i>GPUs held and working</span>
-        <span><i style="background:var(--idle)"></i>GPUs held but idle (&lt;<span class="idle-util">5</span>% util)</span>
+        <span><i style="background:var(--idle)"></i>GPUs held but idle (&lt;<span class="idle-util">5</span>% util for <span class="idle-min">10m</span>+)</span>
         <span>Shared scale: every lane uses the same GPU axis</span>
       </div>
       <div class="lanes" id="lanes"><div class="cross" id="cross"></div></div>
@@ -200,7 +200,7 @@ function renderTiles() {
   const n = state.now; if (!n) return;
   const up = n.hosts.filter(h => h.reachable), gpus = up.flatMap(h => h.gpus);
   const busy = gpus.filter(g => !g.free).length;
-  const idle = gpus.filter(g => g.procs.length && g.util >= 0 && g.util < n.idle_util).length;
+  const idle = gpus.filter(g => g.idle_for != null).length;
   const users = new Set(gpus.flatMap(g => g.procs.map(p => p.user))).size;
   const tile = (k, v, sub) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}${sub ? ` <small>${sub}</small>` : ''}</div></div>`;
   $('#tiles').innerHTML = tile('GPUs busy', busy, `of ${gpus.length}`) + tile('Held but idle', idle, idle ? 'GPUs' : '')
@@ -221,14 +221,14 @@ function renderNow() {
     cards.push(`<div class="host"><h3>${esc(h.host)}<span class="m">${esc(models)}</span><span class="c">${busy}/${h.gpus.length} busy</span></h3>` +
       rows.map(g => {
         const util = g.util >= 0 ? g.util : 0;
-        const idle = g.procs.length && g.util >= 0 && g.util < n.idle_util;
+        const idle = g.idle_for != null;
         let who;
         if (!g.procs.length) who = `<span class="free">${g.free ? 'free' : 'memory held, no visible process'}</span>`;
         else {
           const users = [...new Set(g.procs.map(p => p.user))];
           const rt = Math.max(...g.procs.map(p => p.runtime ?? 0));
           who = `${esc(users.join(', '))} <span class="t">· ${dur(rt)}</span>` +
-            (idle ? `<span class="badge" title="Under ${n.idle_util}% utilisation in every sweep for this long">⚠ idle ${g.idle_for >= n.lookback ? dur(n.lookback) + '+' : dur(g.idle_for)}</span>` : '');
+            (idle ? `<span class="badge" title="Under ${n.idle_util}% utilisation in every sweep for this long (flagged after ${dur(n.idle_min)})">⚠ idle ${g.idle_for >= n.lookback ? dur(n.lookback) + '+' : dur(g.idle_for)}</span>` : '');
         }
         const title = g.procs.map(p => `${p.user} (pid ${p.pid}, ${Math.round(p.mem / 1024)}G): ${p.command}`).join('\n')
           || `${(g.mem_used / 1024).toFixed(1)} / ${(g.mem_total / 1024).toFixed(0)} GB`;
@@ -247,6 +247,7 @@ const LANE_H = 40, PAD = 4;
 function renderTimeline() {
   const L = state.lanes; if (!L) return;
   document.querySelectorAll('.idle-util').forEach(e => e.textContent = L.idle_util);
+  document.querySelectorAll('.idle-min').forEach(e => e.textContent = dur(L.idle_min));
   const lanesEl = $('#lanes');
   lanesEl.querySelectorAll('.lane').forEach(e => e.remove());
   $('#axis').innerHTML = '';
@@ -333,7 +334,7 @@ function renderUsers() {
     { k: 'peak_hosts', h: 'Peak hosts', num: 1, v: r => r.peak_hosts },
     { k: 'hosts', h: 'Hosts used', v: r => r.hosts.length, f: r => `<span title="${esc(r.hosts.join(', '))}">${r.hosts.length}</span>`, num: 1 },
   ], rows, 'users');
-  $('#users-note').textContent = `${L.sweeps} sweeps in this window. Idle = held below ${L.idle_util}% utilisation. Hours count only time the collector was running.`;
+  $('#users-note').textContent = `${L.sweeps} sweeps in this window. Idle = held below ${L.idle_util}% utilisation in every sweep for ${dur(L.idle_min)}+. Hours count only time the collector was running.`;
 }
 function renderFanouts() {
   const F = state.fanouts; if (!F) return;

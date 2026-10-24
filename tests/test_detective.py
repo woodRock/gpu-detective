@@ -78,7 +78,7 @@ def test_user_usage_splits_shared_gpus_and_counts_idle():
             Proc(0, 1, "alice", 1, 0, "x"), Proc(0, 2, "bob", 1, 0, "y"),
             Proc(1, 3, "bob", 1, 0, "z")]))
         snaps.append(snap("b", t, [gpu(0, 90)], [Proc(0, 4, "bob", 1, 0, "y")]))
-    u = {x.user: x for x in an.user_usage(snaps)}
+    u = {x.user: x for x in an.user_usage(snaps, idle_min=0)}
     # 3 samples x 60s each; alice holds half of a:0, bob half of a:0 + a:1 + b:0.
     assert u["alice"].gpu_seconds == 90
     assert u["bob"].gpu_seconds == 90 + 180 + 180
@@ -147,7 +147,7 @@ def test_user_lanes_per_sweep():
     snaps = [snap("a", 0, [gpu(0, 90), gpu(1, 0)], [Proc(0, 1, "alice", 1, 0, "x"),
                                                      Proc(1, 2, "alice", 1, 0, "x")]),
              snap("a", 60, [gpu(0, 90)], [Proc(0, 1, "alice", 1, 0, "x"), Proc(0, 3, "bob", 1, 0, "y")])]
-    times, lanes = an.user_lanes(snaps)
+    times, lanes = an.user_lanes(snaps, idle_min=0)
     assert times == [0, 60]
     assert lanes["alice"] == [(2, 1), (0.5, 0)] and lanes["bob"] == [(0, 0), (0.5, 0)]
 
@@ -165,3 +165,22 @@ def test_redact_keeps_program_and_script_names():
     s = snap("a", 0, [gpu(0, 90)], [Proc(0, 1, "u", 1, 0, "/usr/bin/python3 /home/u/secret/train.py --data /x")])
     redact([s])
     assert s.procs[0].command == "python3 train.py"
+
+
+def test_idle_needs_a_sustained_stretch():
+    """A bursty job read at 0% in the odd sweep (as nvidia-smi samples ~1s) isn't idle;
+    a job at 0% in every sweep for 10m+ is, for the whole stretch."""
+    def s(t, util0, util1):
+        return snap("a", t, [gpu(0, util0), gpu(1, util1)],
+                    [Proc(0, 1, "me", 1, 0, "bursty"), Proc(1, 2, "them", 1, 0, "stuck")])
+    bursty = [30, 0, 28, 31, 0, 33, 0, 29, 30, 0, 31, 27, 0, 30]
+    snaps = [s(60 * i, u, 0) for i, u in enumerate(bursty)]
+    idle = an.sustained_idle(snaps)
+    assert {idx for _, idx in idle} == {1} and len(idle) == len(snaps)
+    u = {x.user: x for x in an.user_usage(snaps)}
+    assert u["me"].idle_gpu_seconds == 0
+    assert u["them"].idle_gpu_seconds == u["them"].gpu_seconds == 60 * len(snaps)
+    # nine minutes isn't enough; a new holder starts a new stretch
+    assert an.sustained_idle(snaps[:10]) == set()
+    snaps[7].procs[1].user = "other"
+    assert an.sustained_idle(snaps) == set()

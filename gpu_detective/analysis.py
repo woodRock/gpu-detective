@@ -12,7 +12,8 @@ from gpu_spooler.gpu import BUSY_MEM_MB, GpuInfo
 
 from gpu_detective.collect import HostSnapshot, Proc
 
-IDLE_UTIL_PCT = 5       # a held GPU below this utilisation counts as idle
+IDLE_UTIL_PCT = 5       # a held GPU below this utilisation counts as idle...
+IDLE_MIN_SECONDS = 600  # ...once it has been, in every sweep, for this long (one low reading is noise)
 MAX_GAP = 300           # a sample stands for at most this many seconds (collector was down)
 FANOUT_WINDOW = 120     # jobs started this close together belong to one fan-out
 FANOUT_MIN_HOSTS = 3
@@ -66,6 +67,38 @@ def sample_weights(snaps: list[HostSnapshot]) -> dict[int, float]:
     return w
 
 
+def sustained_idle(snaps: list[HostSnapshot], min_seconds: float = IDLE_MIN_SECONDS) -> set[tuple[int, int]]:
+    """
+    (id(snapshot), gpu index) for every sample that belongs to a sustained idle
+    stretch: the GPU held, under IDLE_UTIL_PCT, by the same users, in every
+    sweep for at least min_seconds. A bursty job caught between kernels in the
+    odd sweep never qualifies: nvidia-smi's utilisation covers only the last second.
+    """
+    out: set[tuple[int, int]] = set()
+    for series in by_host(snaps).values():
+        runs: dict[int, tuple[frozenset, list[HostSnapshot]]] = {}   # gpu → (users, its samples)
+
+        def close(idx: int) -> None:
+            _, samples = runs.pop(idx)
+            if samples[-1].ts - samples[0].ts >= min_seconds:
+                out.update((id(x), idx) for x in samples)
+
+        for s in series:
+            idle_now: dict[int, frozenset] = {}
+            if s.reachable:
+                for g in s.gpus:
+                    users = frozenset(p.user for p in s.procs_on(g.index))
+                    if users and is_idle(g):
+                        idle_now[g.index] = users
+            for idx in [i for i in runs if idle_now.get(i) != runs[i][0]]:
+                close(idx)
+            for idx, users in idle_now.items():
+                runs.setdefault(idx, (users, []))[1].append(s)
+        for idx in list(runs):
+            close(idx)
+    return out
+
+
 # ── users ─────────────────────────────────────────────────────────────────────
 
 
@@ -87,10 +120,11 @@ class UserUsage:
         return self.idle_gpu_seconds / 3600
 
 
-def user_usage(snaps: list[HostSnapshot]) -> list[UserUsage]:
-    """Per-user GPU time, idle-but-held time and peak spread, heaviest first.
-    A GPU shared by several users is split evenly between them."""
+def user_usage(snaps: list[HostSnapshot], idle_min: float = IDLE_MIN_SECONDS) -> list[UserUsage]:
+    """Per-user GPU time, idle-but-held time (sustained stretches only) and peak
+    spread, heaviest first. A GPU shared by several users is split evenly between them."""
     weights = sample_weights(snaps)
+    idle = sustained_idle(snaps, idle_min)
     usage: dict[str, UserUsage] = {}
     sweeps: dict[float, dict[str, tuple[int, set[str]]]] = defaultdict(dict)
 
@@ -101,7 +135,7 @@ def user_usage(snaps: list[HostSnapshot]) -> list[UserUsage]:
             for u in users:
                 uu = usage.setdefault(u, UserUsage(u))
                 uu.gpu_seconds += w / len(users)
-                if is_idle(g):
+                if (id(s), g.index) in idle:
                     uu.idle_gpu_seconds += w / len(users)
                 uu.hosts.add(s.host)
                 n, hosts = sweeps[s.ts].get(u, (0, set()))
@@ -346,11 +380,14 @@ def gpu_history(snaps: list[HostSnapshot], host: Optional[str] = None,
 # ── per-user lanes ────────────────────────────────────────────────────────────
 
 
-def user_lanes(snaps: list[HostSnapshot]) -> tuple[list[float], dict[str, list[tuple[float, float]]]]:
+def user_lanes(snaps: list[HostSnapshot], idle_min: float = IDLE_MIN_SECONDS
+               ) -> tuple[list[float], dict[str, list[tuple[float, float]]]]:
     """
     Sweep times, and for each user the GPUs (held, of which idle) they had at
-    each sweep. A shared GPU counts fractionally, as in user_usage.
+    each sweep. A shared GPU counts fractionally, and idle means a sustained
+    stretch, as in user_usage.
     """
+    idle = sustained_idle(snaps, idle_min)
     times = sorted({s.ts for s in snaps})
     index = {t: i for i, t in enumerate(times)}
     lanes: dict[str, list[list[float]]] = {}
@@ -361,7 +398,7 @@ def user_lanes(snaps: list[HostSnapshot]) -> tuple[list[float], dict[str, list[t
             for u in users:
                 lane = lanes.setdefault(u, [[0.0, 0.0] for _ in times])
                 lane[i][0] += 1 / len(users)
-                if is_idle(g):
+                if (id(s), g.index) in idle:
                     lane[i][1] += 1 / len(users)
     return times, {u: [(a, b) for a, b in v] for u, v in lanes.items()}
 
