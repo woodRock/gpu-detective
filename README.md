@@ -48,7 +48,7 @@ Every report ends with a visibility line: the share of busy GPU samples where a 
 ## How it works
 
 - **Collector** (`collect.py`): runs gpu-spooler's remote script with a wider `ps`. That adds each GPU process's elapsed time and full command line. All hosts in a sweep share one timestamp.
-- **Store** (`store.py`): SQLite with a `snapshots` table (one row per host per sweep), plus `gpus` and `procs` tables linked to it.
+- **Store** (`store.py`): SQLite with a `snapshots` table (one row per host per sweep), plus `gpus` and `procs` tables linked to it. gpu-spooler's optional `[detective]` table reads this file read-only, so treat the `snapshots`, `gpus` and `procs` columns as a contract with it.
 - **Dashboard** (`web.py`, `web/index.html`): a stdlib HTTP server with JSON endpoints and one self-contained page. It loads no external scripts, and every value is HTML-escaped because command lines come from other users.
 - **Analysis** (`analysis.py`): pure functions over a list of snapshots.
   - Each sample stands for the time until that host's next sweep, capped at 5 minutes.
