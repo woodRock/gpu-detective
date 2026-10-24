@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu-detective"
+version = "0.1.0"
+description = "Who is using the GPU cluster, and how: history and reports on top of gpu-spooler"
+requires-python = ">=3.10"
+dependencies = ["gpu-spooler"]
+
+[project.scripts]
+detective = "gpu_detective.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gpu_detective*"]
+
+# Develop against the sibling checkout. To install elsewhere, swap for:
+#   gpu-spooler = { git = "https://github.com/woodRock/gpu-spooler" }
+[tool.uv.sources]
+gpu-spooler = { path = "../gpu-spooler", editable = true }
