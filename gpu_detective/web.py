@@ -133,7 +133,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port: int = 8765) -> None:
-    httpd = ThreadingHTTPServer((BIND, port), Handler)
+    try:
+        httpd = ThreadingHTTPServer((BIND, port), Handler)
+    except OSError as e:
+        raise SystemExit(f"detective: can't serve on {BIND}:{port} ({e.strerror}). "
+                         f"Another dashboard may be running; try `detective serve -p {port + 1}`.")
     print(f"Dashboard on http://{BIND}:{port} (local only, Ctrl-C to stop)")
     try:
         httpd.serve_forever()
