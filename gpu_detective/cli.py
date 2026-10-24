@@ -7,9 +7,13 @@ detective: who is using the GPU cluster, and how.
     detective users --since 24h   GPU-hours, idle-held hours and spread per user
     detective idle --min 30m      GPUs held but idle
     detective fanouts             one experiment launched across many hosts
+    detective history cuda14:2    who held one GPU (or every GPU on a host), and when
+    detective serve               the dashboard, on http://127.0.0.1:8765
+    detective prune --keep 30d    drop history older than that
 """
 
 import argparse
+import os
 import sys
 import time
 from datetime import datetime
@@ -23,6 +27,8 @@ from gpu_detective import store
 from gpu_detective.collect import HostSnapshot, sweep
 
 STALE = 600     # `now` ignores snapshots older than this
+PRUNE_EVERY = 3600
+KEEP = 30 * 86400.0
 
 
 def clock(ts: float) -> str:
@@ -50,11 +56,21 @@ def summary(snaps: list[HostSnapshot]) -> str:
 # ── commands ──────────────────────────────────────────────────────────────────
 
 
+def redact(snaps: list[HostSnapshot]) -> None:
+    """--shapes-only: keep just the program and script names, without their
+    directories or any arguments (`/home/x/proj/train.py --data ...` → `python train.py`)."""
+    for s in snaps:
+        for p in s.procs:
+            p.command = " ".join(os.path.basename(t) for t in p.command.split()[:2])
+
+
 def cmd_collect(args) -> int:
     cfg = load_config()
     transport = Transport(cfg)
     db = store.connect()
     snaps = sweep(transport, cfg.select(args.hosts))
+    if args.shapes_only:
+        redact(snaps)
     store.save(db, snaps)
     print(f"{clock(snaps[0].ts) if snaps else ''}  {summary(snaps)}")
     for s in snaps:
@@ -68,13 +84,19 @@ def cmd_watch(args) -> int:
     transport = Transport(cfg)
     hosts = cfg.select(args.hosts)
     db = store.connect()
-    print(f"Sweeping {len(hosts)} hosts every {args.interval:.0f}s into {store.db_path()} "
-          f"(Ctrl-C to stop)")
+    print(f"Sweeping {len(hosts)} hosts every {args.interval:.0f}s into {store.db_path()}, "
+          f"keeping {an.fmt_duration(args.keep)} (Ctrl-C to stop)")
+    last_prune = 0.0
     try:
         while True:
             start = time.time()
             snaps = sweep(transport, hosts)
+            if args.shapes_only:
+                redact(snaps)
             store.save(db, snaps)
+            if start - last_prune >= PRUNE_EVERY:
+                store.prune(db, start - args.keep)
+                last_prune = start
             print(f"{clock(start)}  {summary(snaps)}", flush=True)
             time.sleep(max(0.0, args.interval - (time.time() - start)))
     except KeyboardInterrupt:
@@ -108,6 +130,7 @@ def cmd_now(args) -> int:
                                     clip(p.command, args.width)])
     table(rows, ["HOST", "GPU", "MODEL", "UTIL", "MEM", "USER", "RUNTIME", "COMMAND"])
     print(f"\n{summary(snaps)}  (as of {clock(max(s.ts for s in snaps))})")
+    print(an.coverage(snaps).line())
     for s in snaps:
         if not s.reachable:
             print(f"  {s.host}: {s.error}")
@@ -128,6 +151,7 @@ def cmd_users(args) -> int:
     table(rows, ["USER", "GPU-H", "SHARE", "IDLE-H", "PEAK GPUS", "PEAK HOSTS", "HOSTS"])
     print(f"\nWindow: {clock(snaps[0].ts)} → {clock(snaps[-1].ts)}, "
           f"{len({s.ts for s in snaps})} sweeps. IDLE-H = held below {an.IDLE_UTIL_PCT}% util.")
+    print(an.coverage(snaps).line())
     return 0
 
 
@@ -143,6 +167,7 @@ def cmd_idle(args) -> int:
     table(rows, ["HOST", "GPU", "USER", "IDLE FOR", "VRAM HELD", "COMMAND"])
     print(f"\nIdle = below {an.IDLE_UTIL_PCT}% util in every sweep, same users throughout. "
           "Counts only time this tool was watching.")
+    print(an.coverage(an.latest(snaps)).line())
     return 0
 
 
@@ -159,6 +184,36 @@ def cmd_fanouts(args) -> int:
     print(f"\nFan-out = one user's jobs with the same command (numbers ignored) started "
           f"within {an.fmt_duration(args.window) if args.window >= 60 else f'{args.window:.0f}s'}"
           f" of each other on {args.min_hosts}+ hosts.")
+    print(an.coverage(snaps).line())
+    return 0
+
+
+def cmd_history(args) -> int:
+    host, _, gpu = args.target.partition(":")
+    if gpu and not gpu.isdigit():
+        raise SystemExit(f"detective: bad GPU '{gpu}' (use HOST or HOST:INDEX)")
+    snaps = store.load(store.connect(), time.time() - args.since)
+    segs = an.gpu_history(snaps, host, int(gpu) if gpu else None)
+    if not segs:
+        print(f"No history for {args.target} in that window.")
+        return 1
+    rows = [[f"{s.host}:{s.gpu}", clock(s.start), an.fmt_duration(s.end - s.start),
+             ",".join(s.users) or "free", f"{s.mean_util:.0f}%",
+             clip("; ".join(s.commands), args.width)]
+            for s in sorted(segs, key=lambda s: (s.gpu, s.start)) if args.all or not s.free]
+    table(rows, ["GPU", "FROM", "FOR", "USER", "MEAN UTIL", "COMMAND"])
+    return 0
+
+
+def cmd_prune(args) -> int:
+    n = store.prune(store.connect(), time.time() - args.keep)
+    print(f"Deleted {n} snapshots older than {an.fmt_duration(args.keep)}.")
+    return 0
+
+
+def cmd_serve(args) -> int:
+    from gpu_detective import web
+    web.serve(args.port)
     return 0
 
 
@@ -184,13 +239,21 @@ def build_parser() -> argparse.ArgumentParser:
     def width_arg(sp):
         sp.add_argument("-w", "--width", type=int, default=60, help="command column width")
 
+    def shapes_arg(sp):
+        sp.add_argument("--shapes-only", action="store_true",
+                        help="store only program and script names, not full command lines")
+
     sp = sub.add_parser("collect", help="sweep every host once into the history")
     hosts_arg(sp)
+    shapes_arg(sp)
     sp.set_defaults(fn=cmd_collect)
 
     sp = sub.add_parser("watch", help="sweep repeatedly")
     hosts_arg(sp)
+    shapes_arg(sp)
     sp.add_argument("-i", "--interval", type=duration, default=60.0, help="default 60s")
+    sp.add_argument("-k", "--keep", type=duration, default=KEEP,
+                    help="delete history older than this, checked hourly (default 30d)")
     sp.set_defaults(fn=cmd_watch)
 
     sp = sub.add_parser("now", help="every GPU and who is on it, from the latest sweep")
@@ -215,6 +278,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--min-hosts", type=int, default=an.FANOUT_MIN_HOSTS)
     width_arg(sp)
     sp.set_defaults(fn=cmd_fanouts)
+
+    sp = sub.add_parser("history", help="who held a GPU, and when")
+    sp.add_argument("target", metavar="HOST[:GPU]")
+    sp.add_argument("-s", "--since", type=duration, default=86400.0, help="default 24h")
+    sp.add_argument("-a", "--all", action="store_true", help="include free stretches")
+    width_arg(sp)
+    sp.set_defaults(fn=cmd_history)
+
+    sp = sub.add_parser("prune", help="delete old history")
+    sp.add_argument("-k", "--keep", type=duration, default=KEEP, help="default 30d")
+    sp.set_defaults(fn=cmd_prune)
+
+    sp = sub.add_parser("serve", help="local web dashboard")
+    sp.add_argument("-p", "--port", type=int, default=8765)
+    sp.set_defaults(fn=cmd_serve)
     return p
 
 

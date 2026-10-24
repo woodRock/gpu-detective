@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU cluster</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --raised: #ffffff;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.04);
+  --busy: #2a78d6; --idle: #9ec5f4; --free: #e1e0d9;
+  --warn: #fab219; --warn-ink: #7a5200; --warn-wash: rgba(250,178,25,0.16);
+  --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --raised: #222221;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+    --busy: #3987e5; --idle: #184f95; --free: #2c2c2a;
+    --warn: #fab219; --warn-ink: #fab219; --warn-wash: rgba(250,178,25,0.14);
+    --accent: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --raised: #222221;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+  --busy: #3987e5; --idle: #184f95; --free: #2c2c2a;
+  --warn: #fab219; --warn-ink: #fab219; --warn-wash: rgba(250,178,25,0.14);
+  --accent: #3987e5;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 24px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+.asof { color: var(--muted); font-size: 12.5px; }
+.spacer { flex: 1; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 10px 14px; }
+.tile .k { color: var(--ink-2); font-size: 12.5px; }
+.tile .v { font-size: 24px; font-weight: 600; }
+.tile .v small { font-size: 14px; color: var(--muted); font-weight: 400; }
+.bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
+.tabs, .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 2px; }
+.tabs button, .seg button { border: 0; background: none; color: var(--ink-2); font: inherit; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+.tabs button:hover, .seg button:hover { background: var(--wash); }
+.tabs button[aria-selected="true"], .seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--ring); }
+input[type=search] { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 5px 10px; min-width: 200px; }
+label.chk { color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+section[hidden] { display: none; }
+.panel { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 14px 16px; }
+.note { color: var(--muted); font-size: 12.5px; margin: 10px 2px 0; }
+.err { color: var(--warn-ink); background: var(--warn-wash); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+
+/* now */
+.hosts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.host { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 10px 12px 6px; }
+.host h3 { margin: 0; font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
+.host h3 .m { color: var(--muted); font-weight: 400; font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.host h3 .c { color: var(--ink-2); font-weight: 400; font-size: 12px; }
+.gpu { display: grid; grid-template-columns: 18px 64px 34px 1fr; gap: 8px; align-items: center; padding: 5px 4px; margin: 0 -4px; border-radius: 6px; cursor: pointer; }
+.gpu:hover { background: var(--wash); }
+.gpu .i { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.meter { height: 6px; border-radius: 3px; background: var(--free); overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--busy); border-radius: 3px; }
+.gpu .u { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--ink-2); text-align: right; }
+.gpu .who { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.gpu .who .t { color: var(--muted); font-size: 12px; }
+.gpu .free { color: var(--muted); }
+.badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 600; color: var(--warn-ink); background: var(--warn-wash); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+.down { margin-top: 12px; color: var(--ink-2); font-size: 12.5px; }
+
+/* timeline */
+.legend { display: flex; gap: 16px; color: var(--ink-2); font-size: 12.5px; margin-bottom: 8px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.lanes { position: relative; }
+.lane { display: grid; grid-template-columns: 150px 1fr 56px; gap: 10px; align-items: center; border-top: 1px solid var(--grid); }
+.lane .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lane .name small { display: block; color: var(--muted); font-size: 11.5px; }
+.lane .peak { color: var(--ink-2); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.lane svg, .axis svg { display: block; width: 100%; }
+.axis { display: grid; grid-template-columns: 150px 1fr 56px; gap: 10px; }
+.axis text { fill: var(--muted); font-size: 11px; }
+.cross { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--axis); pointer-events: none; display: none; }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--raised); color: var(--ink); border: 1px solid var(--ring); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: none; max-width: 320px; }
+.tip b { font-weight: 600; }
+.tip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+
+/* tables */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--ink-2); font-weight: 500; font-size: 12.5px; padding: 6px 8px; border-bottom: 1px solid var(--axis); white-space: nowrap; cursor: pointer; user-select: none; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+th[aria-sort]::after { content: " ↓"; color: var(--muted); }
+th[aria-sort="ascending"]::after { content: " ↑"; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+tr:hover td { background: var(--wash); }
+td.cmd { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-2); word-break: break-all; }
+.share { display: inline-block; width: 60px; height: 6px; background: var(--free); border-radius: 3px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.share i { display: block; height: 100%; background: var(--busy); }
+.scroll { overflow-x: auto; }
+
+dialog { border: 1px solid var(--ring); border-radius: 12px; background: var(--surface); color: var(--ink); padding: 0; width: min(860px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgba(0,0,0,0.35); }
+.dlg-h { display: flex; align-items: center; padding: 14px 16px 6px; gap: 12px; }
+.dlg-h h2 { font-size: 16px; margin: 0; flex: 1; }
+.dlg-b { padding: 6px 16px 16px; }
+.x { border: 0; background: none; color: var(--ink-2); font-size: 20px; cursor: pointer; line-height: 1; }
+.strip svg { display: block; width: 100%; margin: 6px 0 4px; }
+footer { margin-top: 24px; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 640px) {
+  .lane, .axis { grid-template-columns: 96px 1fr 40px; gap: 6px; }
+  input[type=search] { min-width: 0; flex: 1; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>GPU cluster</h1>
+      <div class="asof" id="asof">Loading…</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg" id="window" role="group" aria-label="Time window">
+      <button data-s="21600">6h</button><button data-s="86400" aria-pressed="true">24h</button><button data-s="604800">7d</button>
+    </div>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+  <div id="error"></div>
+
+  <div class="bar-row">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="now" aria-selected="true">Now</button>
+      <button role="tab" data-tab="timeline">Timeline</button>
+      <button role="tab" data-tab="users">Users</button>
+      <button role="tab" data-tab="fanouts">Fan-outs</button>
+    </div>
+    <input type="search" id="filter" placeholder="Filter by user or host" aria-label="Filter by user or host">
+    <label class="chk" id="busy-wrap"><input type="checkbox" id="busy"> Busy only</label>
+  </div>
+
+  <section id="tab-now"><div class="hosts" id="hosts"></div><div class="down" id="down"></div></section>
+
+  <section id="tab-timeline" hidden>
+    <div class="panel">
+      <div class="legend">
+        <span><i style="background:var(--busy)"></i>GPUs held and working</span>
+        <span><i style="background:var(--idle)"></i>GPUs held but idle (&lt;<span class="idle-util">5</span>% util)</span>
+        <span>Shared scale: every lane uses the same GPU axis</span>
+      </div>
+      <div class="lanes" id="lanes"><div class="cross" id="cross"></div></div>
+      <div class="axis" id="axis"></div>
+    </div>
+    <p class="note">One lane per user, heaviest first. A shared GPU counts as a fraction for each user on it. Gaps are times nobody was sweeping.</p>
+  </section>
+
+  <section id="tab-users" hidden><div class="panel scroll"><table id="users"></table></div><p class="note" id="users-note"></p></section>
+  <section id="tab-fanouts" hidden><div class="panel scroll"><table id="fanouts"></table></div><p class="note" id="fanouts-note"></p></section>
+
+  <footer><div id="coverage"></div><div>Served on 127.0.0.1 only. The history stays on this machine.</div></footer>
+</div>
+
+<dialog id="dlg">
+  <div class="dlg-h"><h2 id="dlg-title"></h2><button class="x" aria-label="Close" onclick="dlg.close()">×</button></div>
+  <div class="dlg-b"><div class="strip" id="dlg-strip"></div><div class="scroll"><table id="dlg-table"></table></div></div>
+</dialog>
+<div class="tip" id="tip"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = { tab: 'now', since: 86400, filter: '', busy: false, now: null, lanes: null, fanouts: null,
+                sort: { users: ['gpu_hours', -1], fanouts: ['hosts', -1] } };
+
+// Every string from the server can come from another user's command line: always escape.
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dur = s => { if (s == null) return '?'; s = Math.floor(s);
+  if (s < 60) return s + 's'; if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h' + String(Math.floor(s % 3600 / 60)).padStart(2, '0') + 'm';
+  return Math.floor(s / 86400) + 'd' + Math.floor(s % 86400 / 3600) + 'h'; };
+const clock = (ts, withDay) => new Date(ts * 1000).toLocaleString([], withDay
+  ? { weekday: 'short', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
+const matches = (...xs) => !state.filter || xs.some(x => String(x).toLowerCase().includes(state.filter));
+
+async function getJSON(url) {
+  const r = await fetch(url); const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+function showError(e) { $('#error').innerHTML = e ? `<div class="err">${esc(e.message || e)}</div>` : ''; }
+
+// ── now ──────────────────────────────────────────────────────────────────────
+function renderTiles() {
+  const n = state.now; if (!n) return;
+  const up = n.hosts.filter(h => h.reachable), gpus = up.flatMap(h => h.gpus);
+  const busy = gpus.filter(g => !g.free).length;
+  const idle = gpus.filter(g => g.procs.length && g.util >= 0 && g.util < n.idle_util).length;
+  const users = new Set(gpus.flatMap(g => g.procs.map(p => p.user))).size;
+  const tile = (k, v, sub) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}${sub ? ` <small>${sub}</small>` : ''}</div></div>`;
+  $('#tiles').innerHTML = tile('GPUs busy', busy, `of ${gpus.length}`) + tile('Held but idle', idle, idle ? 'GPUs' : '')
+    + tile('Users on GPUs', users) + tile('Hosts reachable', up.length, `of ${n.hosts.length}`);
+  $('#asof').textContent = n.ts ? `Latest sweep ${clock(n.ts, true)}` : 'No sweep in the last 10 minutes. Run `detective watch`.';
+  $('#coverage').textContent = n.coverage;
+}
+
+function renderNow() {
+  const n = state.now; if (!n) return;
+  const cards = [];
+  for (const h of n.hosts.filter(h => h.reachable)) {
+    const rows = h.gpus.filter(g => !(state.busy && g.free) &&
+      matches(h.host, ...g.procs.map(p => p.user)));
+    if (!rows.length) continue;
+    const models = [...new Set(h.gpus.map(g => g.model))].join(', ');
+    const busy = h.gpus.filter(g => !g.free).length;
+    cards.push(`<div class="host"><h3>${esc(h.host)}<span class="m">${esc(models)}</span><span class="c">${busy}/${h.gpus.length} busy</span></h3>` +
+      rows.map(g => {
+        const util = g.util >= 0 ? g.util : 0;
+        const idle = g.procs.length && g.util >= 0 && g.util < n.idle_util;
+        let who;
+        if (!g.procs.length) who = `<span class="free">${g.free ? 'free' : 'memory held, no visible process'}</span>`;
+        else {
+          const users = [...new Set(g.procs.map(p => p.user))];
+          const rt = Math.max(...g.procs.map(p => p.runtime ?? 0));
+          who = `${esc(users.join(', '))} <span class="t">· ${dur(rt)}</span>` +
+            (idle ? `<span class="badge" title="Under ${n.idle_util}% utilisation in every sweep for this long">⚠ idle ${g.idle_for >= n.lookback ? dur(n.lookback) + '+' : dur(g.idle_for)}</span>` : '');
+        }
+        const title = g.procs.map(p => `${p.user} (pid ${p.pid}, ${Math.round(p.mem / 1024)}G): ${p.command}`).join('\n')
+          || `${(g.mem_used / 1024).toFixed(1)} / ${(g.mem_total / 1024).toFixed(0)} GB`;
+        return `<div class="gpu" data-host="${esc(h.host)}" data-gpu="${g.index}" title="${esc(title)}">
+          <span class="i">${g.index}</span><div class="meter" aria-label="${util}% utilisation"><i style="width:${util}%"></i></div>
+          <span class="u">${g.util >= 0 ? g.util + '%' : '?'}</span><span class="who">${who}</span></div>`;
+      }).join('') + '</div>');
+  }
+  $('#hosts').innerHTML = cards.join('') || '<p class="note">Nothing matches.</p>';
+  const down = n.hosts.filter(h => !h.reachable);
+  $('#down').innerHTML = down.length ? 'Unreachable: ' + down.map(h => `<b>${esc(h.host)}</b> (${esc(h.error)})`).join(', ') : '';
+}
+
+// ── timeline ─────────────────────────────────────────────────────────────────
+const LANE_H = 40, PAD = 4;
+function renderTimeline() {
+  const L = state.lanes; if (!L) return;
+  document.querySelectorAll('.idle-util').forEach(e => e.textContent = L.idle_util);
+  const lanesEl = $('#lanes');
+  lanesEl.querySelectorAll('.lane').forEach(e => e.remove());
+  $('#axis').innerHTML = '';
+  const users = L.users.filter(u => matches(u.user, ...u.hosts));
+  if (!L.times.length || !users.length) {
+    lanesEl.insertAdjacentHTML('beforeend', '<div class="lane"><span></span><p class="note">No GPU use in this window.</p><span></span></div>');
+    return;
+  }
+  const t0 = L.times[0], t1 = L.times.at(-1) + Math.min(L.max_gap, 60);
+  const ymax = Math.max(1, ...users.flatMap(u => u.series.map(p => p[0])));
+  const W = 1000, X = t => (t - t0) / (t1 - t0) * W, Y = v => LANE_H - PAD - v / ymax * (LANE_H - 2 * PAD);
+  const widths = L.times.map((t, i) => Math.min((L.times[i + 1] ?? t + 60) - t, L.max_gap));
+  for (const u of users) {
+    let busyP = '', idleP = '';
+    u.series.forEach(([held, idle], i) => {
+      if (held <= 0) return;
+      const x0 = X(L.times[i]).toFixed(1), x1 = X(L.times[i] + widths[i]).toFixed(1), b = Y(0);
+      const yb = Y(held - idle).toFixed(1), yh = Y(held).toFixed(1);
+      if (held - idle > 0) busyP += `M${x0} ${b}V${yb}H${x1}V${b}Z`;
+      if (idle > 0) idleP += `M${x0} ${yb}V${yh}H${x1}V${yb}Z`;
+    });
+    lanesEl.insertAdjacentHTML('beforeend', `<div class="lane" data-user="${esc(u.user)}">
+      <div class="name">${esc(u.user)}<small>${u.gpu_hours.toFixed(1)} GPU-h${u.idle_hours >= 0.05 ? ` · ${u.idle_hours.toFixed(1)} idle` : ''}</small></div>
+      <svg viewBox="0 0 ${W} ${LANE_H}" preserveAspectRatio="none" height="${LANE_H}" role="img" aria-label="${esc(u.user)} GPUs held over time">
+        <line x1="0" x2="${W}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--axis)" vector-effect="non-scaling-stroke"/>
+        <path d="${busyP}" fill="var(--busy)"/><path d="${idleP}" fill="var(--idle)"/>
+      </svg><div class="peak" title="Peak GPUs at once">peak ${u.peak_gpus}</div></div>`);
+  }
+  // time axis: ~6 ticks on round hours (or days for long windows)
+  const span = t1 - t0, step = [3600, 7200, 10800, 21600, 43200, 86400].find(s => span / s <= 8) || 86400;
+  const offset = new Date().getTimezoneOffset() * 60;
+  let ticks = '';
+  for (let t = Math.ceil((t0 - offset) / step) * step + offset; t < t1; t += step)
+    ticks += `<text x="${(X(t) / W * 100).toFixed(2)}%" y="12" text-anchor="middle">${clock(t, step >= 86400 || span > 86400)}</text>`;
+  $('#axis').innerHTML = `<span></span><svg height="18">${ticks}</svg><span class="note" style="margin:0">max ${ymax.toFixed(0)}</span>`;
+
+  // hover: crosshair across all lanes + tooltip for the lane under the pointer
+  lanesEl.onmousemove = e => {
+    const lane = e.target.closest('.lane'); const svg = lane?.querySelector('svg');
+    if (!svg) return hideTip();
+    const r = svg.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right) return hideTip();
+    const t = t0 + (e.clientX - r.left) / r.width * (t1 - t0);
+    let i = L.times.findIndex(x => x > t) - 1; if (i < 0) i = L.times.length - 1;
+    const u = users.find(x => x.user === lane.dataset.user), [held, idle] = u.series[i] || [0, 0];
+    const cross = $('#cross'); cross.style.display = 'block';
+    cross.style.left = (e.clientX - lanesEl.getBoundingClientRect().left) + 'px';
+    showTip(e, `<b>${esc(u.user)}</b> · ${clock(L.times[i], true)}<br>
+      <span class="sw" style="background:var(--busy)"></span>${(held - idle).toFixed(1)} working<br>
+      <span class="sw" style="background:var(--idle)"></span>${idle.toFixed(1)} idle`);
+  };
+  lanesEl.onmouseleave = hideTip;
+}
+function showTip(e, html) { const t = $('#tip'); t.innerHTML = html; t.style.display = 'block';
+  const x = Math.min(e.clientX + 14, innerWidth - t.offsetWidth - 8); t.style.left = x + 'px'; t.style.top = (e.clientY + 14) + 'px'; }
+function hideTip() { $('#tip').style.display = 'none'; $('#cross').style.display = 'none'; }
+
+// ── tables ───────────────────────────────────────────────────────────────────
+function sortable(id, cols, rows, key) {
+  const [sk, dir] = state.sort[key];
+  rows.sort((a, b) => { const x = cols.find(c => c.k === sk).v(a), y = cols.find(c => c.k === sk).v(b);
+    return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+  const el = $(id);
+  el.parentElement.hidden = !rows.length;
+  el.innerHTML = `<thead><tr>${cols.map(c => `<th data-k="${c.k}" class="${c.num ? 'num' : ''}"${c.k === sk ? ` aria-sort="${dir > 0 ? 'ascending' : 'descending'}"` : ''}>${c.h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''} ${c.cls || ''}">${c.f ? c.f(r) : esc(c.v(r))}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  el.querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.k; state.sort[key] = [k, state.sort[key][0] === k ? -state.sort[key][1] : (cols.find(c => c.k === k).num ? -1 : 1)];
+    render();
+  });
+}
+function renderUsers() {
+  const L = state.lanes; if (!L) return;
+  const total = L.users.reduce((s, u) => s + u.gpu_hours, 0) || 1;
+  const rows = L.users.filter(u => matches(u.user, ...u.hosts));
+  sortable('#users', [
+    { k: 'user', h: 'User', v: r => r.user },
+    { k: 'gpu_hours', h: 'GPU-hours', num: 1, v: r => r.gpu_hours, f: r => r.gpu_hours.toFixed(1) },
+    { k: 'share', h: 'Share of use', num: 1, v: r => r.gpu_hours / total,
+      f: r => `<span class="share"><i style="width:${(100 * r.gpu_hours / total).toFixed(1)}%"></i></span>${(100 * r.gpu_hours / total).toFixed(0)}%` },
+    { k: 'idle_hours', h: 'Idle GPU-hours', num: 1, v: r => r.idle_hours, f: r => r.idle_hours.toFixed(1) },
+    { k: 'idle_pct', h: 'Idle share', num: 1, v: r => r.gpu_hours ? r.idle_hours / r.gpu_hours : 0,
+      f: r => r.gpu_hours ? (100 * r.idle_hours / r.gpu_hours).toFixed(0) + '%' : '–' },
+    { k: 'peak_gpus', h: 'Peak GPUs', num: 1, v: r => r.peak_gpus },
+    { k: 'peak_hosts', h: 'Peak hosts', num: 1, v: r => r.peak_hosts },
+    { k: 'hosts', h: 'Hosts used', v: r => r.hosts.length, f: r => `<span title="${esc(r.hosts.join(', '))}">${r.hosts.length}</span>`, num: 1 },
+  ], rows, 'users');
+  $('#users-note').textContent = `${L.sweeps} sweeps in this window. Idle = held below ${L.idle_util}% utilisation. Hours count only time the collector was running.`;
+}
+function renderFanouts() {
+  const F = state.fanouts; if (!F) return;
+  const rows = F.fanouts.filter(f => matches(f.user, f.shape, ...f.hosts));
+  sortable('#fanouts', [
+    { k: 'user', h: 'User', v: r => r.user },
+    { k: 'hosts', h: 'Hosts', num: 1, v: r => r.hosts.length, f: r => `<span title="${esc(r.hosts.join(', '))}">${r.hosts.length}</span>` },
+    { k: 'gpus', h: 'GPUs', num: 1, v: r => r.gpus },
+    { k: 'start', h: 'Started', v: r => r.start, f: r => clock(r.start, true) },
+    { k: 'seen', h: 'Seen for', num: 1, v: r => r.last_seen - r.start, f: r => dur(r.last_seen - r.start) },
+    { k: 'shape', h: 'Command shape', v: r => r.shape, cls: 'cmd' },
+  ], rows, 'fanouts');
+  $('#fanouts-note').textContent = rows.length ? `One user's jobs with the same command (numbers ignored), started within ${dur(F.window)} of each other on ${F.min_hosts}+ hosts.`
+    : 'No fan-outs in this window.';
+}
+
+// ── per-GPU history dialog ───────────────────────────────────────────────────
+const dlg = $('#dlg');
+async function openHistory(host, gpu) {
+  $('#dlg-title').textContent = `${host} · GPU ${gpu} · last ${document.querySelector('#window [aria-pressed="true"]').textContent}`;
+  $('#dlg-strip').innerHTML = ''; $('#dlg-table').innerHTML = '<tr><td>Loading…</td></tr>';
+  dlg.showModal();
+  try {
+    const H = await getJSON(`/api/history?host=${encodeURIComponent(host)}&gpu=${gpu}&since=${state.since}`);
+    const segs = H.segments; if (!segs.length) { $('#dlg-table').innerHTML = '<tr><td>No history.</td></tr>'; return; }
+    const t0 = segs[0].start, t1 = Math.max(...segs.map(s => s.end)), W = 1000, X = t => (t - t0) / (t1 - t0 || 1) * W;
+    const fill = s => !s.users.length ? 'var(--free)' : s.util < H.idle_util ? 'var(--idle)' : 'var(--busy)';
+    $('#dlg-strip').innerHTML = `<svg viewBox="0 0 ${W} 18" preserveAspectRatio="none" height="18">${segs.map(s =>
+      `<rect x="${X(s.start).toFixed(1)}" y="0" width="${Math.max(0.5, X(s.end) - X(s.start) - 1).toFixed(1)}" height="18" rx="2" fill="${fill(s)}"><title>${esc((s.users.join(', ') || 'free') + ' · ' + clock(s.start, true) + ' for ' + dur(s.end - s.start))}</title></rect>`).join('')}</svg>
+      <div class="legend"><span><i style="background:var(--busy)"></i>held, working</span><span><i style="background:var(--idle)"></i>held, mean util under ${H.idle_util}%</span><span><i style="background:var(--free)"></i>free</span></div>`;
+    const rows = segs.filter(s => s.users.length).reverse();
+    $('#dlg-table').innerHTML = `<thead><tr><th>From</th><th class="num">For</th><th>User</th><th class="num">Mean util</th><th>Command</th></tr></thead><tbody>${
+      rows.map(s => `<tr><td>${clock(s.start, true)}</td><td class="num">${dur(s.end - s.start)}</td><td>${esc(s.users.join(', '))}</td><td class="num">${s.util.toFixed(0)}%</td><td class="cmd">${esc(s.commands.join('; '))}</td></tr>`).join('')
+      || '<tr><td colspan="5">Free for the whole window.</td></tr>'}</tbody>`;
+  } catch (e) { $('#dlg-table').innerHTML = `<tr><td>${esc(e.message)}</td></tr>`; }
+}
+$('#hosts').onclick = e => { const g = e.target.closest('.gpu'); if (g) openHistory(g.dataset.host, g.dataset.gpu); };
+
+// ── wiring ───────────────────────────────────────────────────────────────────
+function render() {
+  $('#busy-wrap').style.display = state.tab === 'now' ? '' : 'none';
+  renderTiles();
+  ({ now: renderNow, timeline: renderTimeline, users: renderUsers, fanouts: renderFanouts })[state.tab]();
+}
+async function load() {
+  try {
+    const now = getJSON('/api/now');
+    const tabData = state.tab === 'timeline' || state.tab === 'users' ? getJSON(`/api/lanes?since=${state.since}`)
+      : state.tab === 'fanouts' ? getJSON(`/api/fanouts?since=${state.since}`) : null;
+    state.now = await now;
+    if (tabData) state[state.tab === 'fanouts' ? 'fanouts' : 'lanes'] = await tabData;
+    showError(null); render();
+  } catch (e) { showError(e); }
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
+  state.tab = b.dataset.tab;
+  document.querySelectorAll('section').forEach(s => s.hidden = s.id !== 'tab-' + state.tab);
+  try { localStorage.setItem('detective-tab', state.tab); } catch (e) {}
+  load();
+});
+document.querySelectorAll('#window button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#window button').forEach(x => x.setAttribute('aria-pressed', x === b));
+  state.since = +b.dataset.s; state.lanes = state.fanouts = null; load();
+});
+$('#filter').oninput = e => { state.filter = e.target.value.trim().toLowerCase(); render(); };
+$('#busy').onchange = e => { state.busy = e.target.checked; render(); };
+addEventListener('resize', () => state.tab === 'timeline' && render());
+try { const t = localStorage.getItem('detective-tab'); if (t) document.querySelector(`.tabs [data-tab="${t}"]`)?.click(); else load(); } catch (e) { load(); }
+setInterval(load, 60000);
+</script>
+</body>
+</html>

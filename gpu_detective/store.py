@@ -83,6 +83,13 @@ def save(db: sqlite3.Connection, snaps: Iterable[HostSnapshot]) -> None:
                  for p in s.procs])
 
 
+def prune(db: sqlite3.Connection, before: float) -> int:
+    """Delete snapshots older than `before` (their GPUs and processes cascade). Returns the count."""
+    with db:
+        n = db.execute("DELETE FROM snapshots WHERE ts < ?", (before,)).rowcount
+    return n
+
+
 def load(db: sqlite3.Connection, since: float = 0.0) -> list[HostSnapshot]:
     """Snapshots with ts >= since, oldest first."""
     snaps: dict[int, HostSnapshot] = {}

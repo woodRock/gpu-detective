@@ -123,3 +123,45 @@ def test_parse_duration_and_format():
     assert an.fmt_duration(59 * 60) == "59m"
     assert an.fmt_duration(3 * 3600 + 5 * 60) == "3h05m"
     assert an.fmt_duration(90000) == "1d1h"
+
+
+def test_coverage_flags_hosts_hiding_processes():
+    snaps = [snap("open", 0, [gpu(0, 90)], [Proc(0, 1, "alice", 1, 0, "x")]),
+             snap("blind", 0, [gpu(0, 90), gpu(1, 90)], [])]
+    c = an.coverage(snaps)
+    assert (c.busy_samples, c.visible_samples, c.blind_hosts) == (3, 1, {"blind"})
+    assert "blind" in c.line() and "33%" in c.line()
+
+
+def test_gpu_history_merges_sweeps_and_breaks_on_change():
+    p = lambda pid, user: [Proc(0, pid, user, 1, 0, f"{user}.py")]
+    series = [snap("a", 0, [gpu(0, 90)], p(1, "alice")), snap("a", 60, [gpu(0, 70)], p(1, "alice")),
+              snap("a", 120, [gpu(0, -1)], []), snap("a", 180, [gpu(0, 0)], p(2, "bob"))]
+    segs = an.gpu_history(series, "a", 0)
+    assert [(s.start, s.end, s.users) for s in segs] == [
+        (0, 120, ["alice"]), (120, 180, []), (180, 240, ["bob"])]
+    assert segs[0].mean_util == 80 and segs[0].commands == ["alice.py"]
+
+
+def test_user_lanes_per_sweep():
+    snaps = [snap("a", 0, [gpu(0, 90), gpu(1, 0)], [Proc(0, 1, "alice", 1, 0, "x"),
+                                                     Proc(1, 2, "alice", 1, 0, "x")]),
+             snap("a", 60, [gpu(0, 90)], [Proc(0, 1, "alice", 1, 0, "x"), Proc(0, 3, "bob", 1, 0, "y")])]
+    times, lanes = an.user_lanes(snaps)
+    assert times == [0, 60]
+    assert lanes["alice"] == [(2, 1), (0.5, 0)] and lanes["bob"] == [(0, 0), (0.5, 0)]
+
+
+def test_prune(tmp_path):
+    db = store.connect(tmp_path / "h.db")
+    store.save(db, [parse_snapshot("a", 100.0, RAW), parse_snapshot("a", 200.0, RAW)])
+    assert store.prune(db, 150.0) == 1
+    assert [s.ts for s in store.load(db)] == [200.0]
+    assert db.execute("SELECT COUNT(*) FROM procs").fetchone()[0] == 2
+
+
+def test_redact_keeps_program_and_script_names():
+    from gpu_detective.cli import redact
+    s = snap("a", 0, [gpu(0, 90)], [Proc(0, 1, "u", 1, 0, "/usr/bin/python3 /home/u/secret/train.py --data /x")])
+    redact([s])
+    assert s.procs[0].command == "python3 train.py"

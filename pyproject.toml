@@ -23,3 +23,6 @@ include = ["gpu_detective*"]
 #   gpu-spooler = { git = "https://github.com/woodRock/gpu-spooler" }
 [tool.uv.sources]
 gpu-spooler = { path = "../gpu-spooler", editable = true }
+
+[tool.setuptools.package-data]
+gpu_detective = ["web/*.html"]

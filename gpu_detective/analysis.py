@@ -235,6 +235,137 @@ def fanouts(snaps: list[HostSnapshot], window: float = FANOUT_WINDOW,
     return sorted(out, key=lambda f: (-len(f.hosts), -f.gpu_count))
 
 
+# ── coverage ──────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Coverage:
+    busy_samples: int = 0       # (snapshot, busy GPU) pairs
+    visible_samples: int = 0    # ... of which showed at least one process
+    procs: int = 0
+    known_procs: int = 0        # ... with a user and a start time
+    blind_hosts: set[str] = field(default_factory=set)   # busy GPUs but no process ever seen
+
+    @property
+    def pct(self) -> float:
+        return 100.0 * self.visible_samples / self.busy_samples if self.busy_samples else 100.0
+
+    def line(self) -> str:
+        s = f"Visibility: {self.pct:.0f}% of busy GPU samples showed their process"
+        if self.procs and self.known_procs < self.procs:
+            s += f"; {self.procs - self.known_procs} process samples had no user or start time"
+        if self.blind_hosts:
+            s += f"; no processes visible at all on {', '.join(sorted(self.blind_hosts))}"
+        return s + "."
+
+
+def coverage(snaps: list[HostSnapshot]) -> Coverage:
+    """How much of the busy GPU time we could attribute to a process: low on a
+    host that hides other users' processes."""
+    c = Coverage()
+    busy_by_host: dict[str, int] = defaultdict(int)
+    seen_by_host: dict[str, int] = defaultdict(int)
+    for s in snaps:
+        for g in s.gpus:
+            if is_free(s, g):
+                continue
+            c.busy_samples += 1
+            busy_by_host[s.host] += 1
+            if s.procs_on(g.index):
+                c.visible_samples += 1
+                seen_by_host[s.host] += 1
+        c.procs += len(s.procs)
+        c.known_procs += sum(1 for p in s.procs if p.user != "?" and p.started is not None)
+    c.blind_hosts = {h for h, n in busy_by_host.items() if n and not seen_by_host[h]}
+    return c
+
+
+# ── per-GPU history ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class Segment:
+    """A stretch of time one GPU was held by the same processes (or free)."""
+    host: str
+    gpu: int
+    start: float
+    end: float
+    users: list[str]
+    commands: list[str]
+    util_sum: float = 0.0
+    samples: int = 0
+
+    @property
+    def mean_util(self) -> float:
+        return self.util_sum / self.samples if self.samples else 0.0
+
+    @property
+    def free(self) -> bool:
+        return not self.users
+
+
+def gpu_history(snaps: list[HostSnapshot], host: Optional[str] = None,
+                gpu: Optional[int] = None) -> list[Segment]:
+    """
+    Every GPU's timeline as segments of unchanged occupancy, merged across
+    sweeps while the same pids hold it. A segment ends at the next sweep that
+    differs (or the last sample + its weight); unreachable sweeps break it.
+    """
+    weights = sample_weights(snaps)
+    out: list[Segment] = []
+    for h, series in sorted(by_host(snaps).items()):
+        if host is not None and h != host:
+            continue
+        open_: dict[int, tuple[tuple, Segment]] = {}
+        for s in series:
+            if not s.reachable:
+                open_.clear()
+                continue
+            for g in s.gpus:
+                if gpu is not None and g.index != gpu:
+                    continue
+                procs = s.procs_on(g.index)
+                key = tuple(sorted((p.pid, p.user) for p in procs))
+                end = s.ts + weights[id(s)]
+                cur = open_.get(g.index)
+                if cur and cur[0] == key and s.ts <= cur[1].end + 1:
+                    seg = cur[1]
+                    seg.end = end
+                else:
+                    seg = Segment(h, g.index, s.ts, end,
+                                  sorted({p.user for p in procs}),
+                                  sorted({p.command for p in procs}))
+                    out.append(seg)
+                    open_[g.index] = (key, seg)
+                if g.utilization_pct >= 0:
+                    seg.util_sum += g.utilization_pct
+                    seg.samples += 1
+    return out
+
+
+# ── per-user lanes ────────────────────────────────────────────────────────────
+
+
+def user_lanes(snaps: list[HostSnapshot]) -> tuple[list[float], dict[str, list[tuple[float, float]]]]:
+    """
+    Sweep times, and for each user the GPUs (held, of which idle) they had at
+    each sweep. A shared GPU counts fractionally, as in user_usage.
+    """
+    times = sorted({s.ts for s in snaps})
+    index = {t: i for i, t in enumerate(times)}
+    lanes: dict[str, list[list[float]]] = {}
+    for s in snaps:
+        i = index[s.ts]
+        for g in s.gpus:
+            users = sorted({p.user for p in s.procs_on(g.index)})
+            for u in users:
+                lane = lanes.setdefault(u, [[0.0, 0.0] for _ in times])
+                lane[i][0] += 1 / len(users)
+                if is_idle(g):
+                    lane[i][1] += 1 / len(users)
+    return times, {u: [(a, b) for a, b in v] for u, v in lanes.items()}
+
+
 # ── formatting helpers ────────────────────────────────────────────────────────
 
 
