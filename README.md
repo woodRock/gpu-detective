@@ -11,6 +11,8 @@ It answers questions a one-off `nvidia-smi` can't:
 
 It's built on [gpu-spooler](https://github.com/woodRock/gpu-spooler) and reuses its host list, SSH setup (including the off-campus jump hosts) and `nvidia-smi` query. If `task hosts` works for you, gpu-detective works too. It's set up for the VUW ECS cluster through gpu-spooler's config.
 
+gpu-spooler has since been rewritten in Rust. Until gpu-detective is ported too, it uses the Python gpu-spooler 0.1 (tag [`v0.1-python`](https://github.com/woodRock/gpu-spooler/tree/v0.1-python)) as a library. The `task` commands this README mentions still work with the Rust gpu-spooler, which reads the same `~/.gpu-spooler/hosts.toml`.
+
 ## Install
 
 ```sh
@@ -31,7 +33,7 @@ For development, from a checkout:
 bash install.sh
 ```
 
-That installs `detective` editable from the checkout. If a `../gpu-spooler` checkout sits next to it, that's installed editable too, so edits to either take effect straight away.
+That installs `detective` editable from the checkout. If a `../gpu-spooler` checkout sits next to it and still has the Python package (`gpu_spooler/`, as at tag `v0.1-python`), that's installed editable too, so edits to either take effect straight away. Otherwise gpu-spooler comes from the `v0.1-python` tag.
 
 ## Quick start
 

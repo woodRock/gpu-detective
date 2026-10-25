@@ -6,18 +6,19 @@
 #
 # gpu-detective is installed from GitHub with uv (https://docs.astral.sh/uv/) into its own isolated
 # environment, with its command (detective) linked into ~/.local/bin. Its one dependency, gpu-spooler,
-# comes from GitHub too. uv is installed first if missing, and uv downloads Python 3.11 if the machine
+# comes from GitHub too, pinned to its last Python version (tag v0.1-python). uv is installed first if missing, and uv downloads Python 3.11 if the machine
 # doesn't have it. Nothing needs sudo.
 # The same installer, with the same options, is in kete, ruru, taura, gpu-spooler and gpu-detective.
 
 set -euo pipefail
 
 # Run from a checkout with no options (bash install.sh): the development install, editable, using
-# a sibling ../gpu-spooler checkout when there is one. Piped from curl, there is no checkout.
+# a sibling ../gpu-spooler checkout while it still has the Python package (gpu-spooler's main is now
+# Rust); otherwise gpu-spooler comes from the v0.1-python tag. Piped from curl, there is no checkout.
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"
 if [ $# -eq 0 ] && [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$here/pyproject.toml" ] && [ -d "$here/gpu_detective" ]; then
   extra=()
-  [ -f "$here/../gpu-spooler/pyproject.toml" ] && extra=(--no-sources --with-editable "$here/../gpu-spooler")
+  [ -f "$here/../gpu-spooler/gpu_spooler/__init__.py" ] && extra=(--no-sources --with-editable "$here/../gpu-spooler")
   echo "Development install from $here${extra[*]:+ (with ../gpu-spooler, editable)}"
   exec uv tool install --python 3.11 --reinstall --editable "$here" "${extra[@]+"${extra[@]}"}"
 fi

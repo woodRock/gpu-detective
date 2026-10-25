@@ -24,4 +24,5 @@ include = ["gpu_detective*"]
 gpu_detective = ["web/*.html"]
 
 [tool.uv.sources]
-gpu-spooler = { git = "https://github.com/woodRock/gpu-spooler" }
+# gpu-spooler's main is now Rust; its last Python version is tagged v0.1-python.
+gpu-spooler = { git = "https://github.com/woodRock/gpu-spooler", tag = "v0.1-python" }

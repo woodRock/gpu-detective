@@ -37,7 +37,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "gpu-spooler", git = "https://github.com/woodRock/gpu-spooler" }]
+requires-dist = [{ name = "gpu-spooler", git = "https://github.com/woodRock/gpu-spooler?tag=v0.1-python" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest" }]
@@ -45,7 +45,7 @@ dev = [{ name = "pytest" }]
 [[package]]
 name = "gpu-spooler"
 version = "0.1.0"
-source = { git = "https://github.com/woodRock/gpu-spooler#debf8e098051813231f3ece85c0acb4d91dc954a" }
+source = { git = "https://github.com/woodRock/gpu-spooler?tag=v0.1-python#293925ddaedb613c9881a274b141cfaf534a6406" }
 dependencies = [
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
